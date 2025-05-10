@@ -4,7 +4,7 @@ import pandas as pd
 from parser import parse_cea_output
 
 class ParserThread(QThread):
-    """Background thread to parse CEA output without freezing the GUI."""
+    """Background thread"""
     progress = pyqtSignal(int)
     finished = pyqtSignal(pd.DataFrame)
     error = pyqtSignal(str)
