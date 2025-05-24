@@ -3,21 +3,21 @@ import pandas as pd
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from PyQt5.QtWidgets import (
-    QMainWindow, QFileDialog, QWidget, QDockWidget,
-    QVBoxLayout, QAction, QTabWidget, QTableView, QTextEdit,
-    QStatusBar, QProgressBar, QFormLayout, QLineEdit, QPushButton, QSizePolicy, QInputDialog
-)
-from PyQt5.QtCore import Qt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QTabWidget, QWidget, \
+    QVBoxLayout, QTextEdit, QDockWidget, QFormLayout, QLineEdit, QPushButton, \
+    QStatusBar, QProgressBar, QFileDialog, QSizePolicy, QComboBox, QAction, \
+    QHBoxLayout, QLabel, QGroupBox, QRadioButton, QButtonGroup, QCheckBox, QGridLayout
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
+
 from parser import parse_cea_output
 from models import PandasModel
 from threads import ParserThread
-from plots import create_graphs, create_heatmaps
+from plots import create_graphs
 from analysis import compute_system
 from exporter import export_csv, export_excel, export_pdf
 from config import CONFIG, CONFIG_PATH
-from analysis import compute_system
+import nozzle
 from moc import generate_moc_contour
 
 class MainWindow(QMainWindow):
@@ -61,6 +61,58 @@ class MainWindow(QMainWindow):
         wsys=QWidget(); lsys=QVBoxLayout(wsys); lsys.addWidget(self.sys_canvas); lsys.addWidget(self.sys_text)
         self.tabs.addTab(wsys, "Nozzle/System")
         self.reco = QTextEdit(); self.reco.setReadOnly(True); self.tabs.addTab(self.reco, "Recommendations")
+        
+        # ─── Nozzle Design Tab ───
+        self.nozzle_widget = QWidget()
+        self.nozzle_layout = QVBoxLayout(self.nozzle_widget)
+        
+        # Control panel for nozzle design
+        control_panel = QGroupBox("Nozzle Design Controls")
+        control_layout = QGridLayout()
+        
+        # Nozzle type selection
+        self.nozzle_type_label = QLabel("Nozzle Type:")
+        self.nozzle_type_combo = QComboBox()
+        self.nozzle_type_combo.addItems(["Conical", "Rao Optimum", "80% Bell", "Method of Characteristics (MOC)", "Truncated Ideal Contour (TIC)"])
+        self.nozzle_type_combo.currentIndexChanged.connect(self.update_nozzle_design)
+        control_layout.addWidget(self.nozzle_type_label, 0, 0)
+        control_layout.addWidget(self.nozzle_type_combo, 0, 1)
+        
+        # Throat radius control
+        self.throat_radius_label = QLabel("Throat Radius (m):")
+        self.throat_radius_edit = QLineEdit()
+        self.throat_radius_edit.setText("0.05")
+        self.throat_radius_edit.textChanged.connect(self.update_nozzle_design)
+        control_layout.addWidget(self.throat_radius_label, 1, 0)
+        control_layout.addWidget(self.throat_radius_edit, 1, 1)
+        
+        # Include inlet section checkbox
+        self.include_inlet_checkbox = QCheckBox("Include Inlet Section")
+        self.include_inlet_checkbox.setChecked(True)
+        self.include_inlet_checkbox.stateChanged.connect(self.update_nozzle_design)
+        control_layout.addWidget(self.include_inlet_checkbox, 2, 0, 1, 2)
+        
+        # Export nozzle coordinates button
+        self.export_nozzle_button = QPushButton("Export Nozzle Coordinates")
+        self.export_nozzle_button.clicked.connect(self.export_nozzle_coordinates)
+        control_layout.addWidget(self.export_nozzle_button, 3, 0, 1, 2)
+        
+        control_panel.setLayout(control_layout)
+        self.nozzle_layout.addWidget(control_panel)
+        
+        # Nozzle visualization
+        self.nozzle_canvas = FigureCanvas(Figure(figsize=(10, 6), tight_layout=True))
+        self.nozzle_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.nozzle_layout.addWidget(self.nozzle_canvas)
+        
+        # Nozzle performance text
+        self.nozzle_text = QTextEdit()
+        self.nozzle_text.setReadOnly(True)
+        self.nozzle_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.nozzle_text.setMaximumHeight(150)
+        self.nozzle_layout.addWidget(self.nozzle_text)
+        
+        self.tabs.addTab(self.nozzle_widget, "Nozzle Design")
 
         # ─── MOC (Method of Characteristics) ───
 
@@ -156,10 +208,11 @@ class MainWindow(QMainWindow):
         self.update_table()
         self.update_graphs()
         self.update_summary()
-        self.update_optimization()
+        # self.update_optimization()
         self.update_system()
         self.update_moc()
         self.update_recommendations()
+        self.update_nozzle_design()
 
     def update_table(self):
         self.tbl.setModel(PandasModel(self.df))
@@ -184,13 +237,8 @@ class MainWindow(QMainWindow):
         self.sum_text.setHtml(html)
 
     def update_optimization(self):
-        # rebuild the heatmap figure
-        hm = create_heatmaps(self.df)["Heatmaps"]
-        # swap into the canvas
-        self.opt_canvas.figure = hm
-        self.opt_canvas.draw()
-        # update the description
-        self.opt_text.setHtml(f"<h2>Optimization (degree = {CONFIG['regression_degree']})</h2>")
+        # Display a message that optimization feature has been removed
+        self.opt_text.setHtml("<h2>Optimization</h2><p>Optimization heatmaps feature has been removed.</p>")
 
     def update_moc(self):
         """
@@ -329,17 +377,243 @@ class MainWindow(QMainWindow):
         fn, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
         if fn:
             export_csv(self.df, fn)
-
+            
     def export_excel(self):
         fn, _ = QFileDialog.getSaveFileName(self, "Save Excel", "", "Excel Files (*.xlsx)")
         if fn:
             # summary as small DataFrame
             summary = pd.DataFrame([self.df.loc[self.df["Isp (s)"].idxmax()]])
             export_excel(self.df, summary, fn)
-
+            
     def export_pdf(self):
         fn, _ = QFileDialog.getSaveFileName(self, "Save PDF", "", "PDF Files (*.pdf)")
         if fn:
             figs = {"Cover": self.figures["Isp"]}
             figs.update(create_graphs(self.df))
             export_pdf(figs, CONFIG["pdf_report_title"], fn)
+            
+    def update_nozzle_design(self):
+        """Update the nozzle design based on current settings"""
+        if self.df is None or len(self.df) == 0:
+            return
+            
+        # Get the best case from the dataframe
+        best_case = self.df.iloc[self.df['Isp (s)'].idxmax()]
+        
+        # Get the throat radius from the input field
+        try:
+            R_throat = float(self.throat_radius_edit.text())
+        except ValueError:
+            R_throat = 0.05  # Default to 5cm if invalid input
+            self.throat_radius_edit.setText("0.05")
+        
+        # Get the nozzle type
+        nozzle_type = self.nozzle_type_combo.currentText()
+        
+        # Store the nozzle type in the CEA data for performance calculations
+        cea_data = best_case.copy()
+        cea_data['nozzle_type'] = nozzle_type
+        
+        # Generate the nozzle contour based on the selected type
+        if nozzle_type == "Conical":
+            x, r = nozzle.conical_nozzle(cea_data, R_throat=R_throat)
+        elif nozzle_type == "Rao Optimum":
+            x, r = nozzle.rao_optimum_nozzle(cea_data, R_throat=R_throat)
+        elif nozzle_type == "80% Bell":
+            x, r = nozzle.bell_nozzle(cea_data, R_throat=R_throat, percent_bell=80)
+        elif nozzle_type == "Method of Characteristics (MOC)":
+            x, r = nozzle.moc_nozzle(cea_data, R_throat=R_throat)
+        elif nozzle_type == "Truncated Ideal Contour (TIC)":
+            x, r = nozzle.truncated_ideal_contour(cea_data, R_throat=R_throat, truncation_factor=0.8)
+        else:
+            # Default to conical if something goes wrong
+            x, r = nozzle.conical_nozzle(cea_data, R_throat=R_throat)
+        
+        # Add inlet section if requested
+        if self.include_inlet_checkbox.isChecked():
+            x, r = nozzle.add_inlet_section(x, r, R_throat)
+        
+        # Store the current coordinates for export
+        self.current_nozzle_coords = (x, r)
+        
+        # Calculate performance metrics
+        performance = nozzle.calculate_performance(cea_data, (x, r))
+        
+        # Plot the nozzle with professional engineering styling
+        fig = self.nozzle_canvas.figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        
+        # Find the actual throat position
+        if self.include_inlet_checkbox.isChecked():
+            # If inlet is included, throat is at x=0
+            throat_idx = np.argmin(np.abs(x))
+        else:
+            # Otherwise find the minimum radius
+            throat_idx = np.argmin(r)
+            
+        throat_x = x[throat_idx]
+        throat_r = r[throat_idx]
+        exit_r = r[-1]
+        
+        # Plot with engineering-standard styling
+        # Outer contour (thick blue line)
+        ax.plot(x, r, 'b-', lw=2.5)
+        ax.plot(x, -r, 'b-', lw=2.5)
+        
+        # Fill the nozzle with a subtle gradient
+        # Create a gradient fill from dark in chamber to light at exit
+        from matplotlib.colors import LinearSegmentedColormap
+        cmap = LinearSegmentedColormap.from_list('nozzle_gradient', ['#d0d0d0', '#f8f8f8'])
+        for i in range(len(x)-1):
+            ax.fill_between(x[i:i+2], r[i:i+2], -r[i:i+2], 
+                           color=cmap(i/len(x)), alpha=0.7, linewidth=0)
+            
+        # Add centerline
+        ax.axhline(y=0, color='k', linestyle='-', alpha=0.5, lw=0.5)
+        
+        # Calculate aspect ratio to make the nozzle look proportional
+        length = x[-1] - x[0]
+        max_radius = max(r)
+        aspect_ratio = length / (max_radius * 2.2)  # Adjust for proper proportions
+        ax.set_aspect(aspect_ratio)
+        
+        # Add key dimension lines and annotations using improved techniques
+        # Use a common offset for all dimension lines to maintain consistency
+        dimension_gap = length * 0.03  # Gap between contour and dimension line start
+        
+        # Instead of dividing the throat with a line, use a marker and offset dimension
+        # Add throat marker
+        ax.plot([throat_x], [0], 'ro', markersize=4)
+        
+        # Throat radius - use an offset horizontal leader line that doesn't cross the nozzle
+        # Draw a small tick at the throat wall
+        ax.plot([throat_x-dimension_gap*0.2, throat_x+dimension_gap*0.2], [throat_r, throat_r], 'r-', lw=1)
+        # Draw the leader line to the side
+        ax.plot([throat_x-dimension_gap*0.2, throat_x-dimension_gap], [throat_r, throat_r], 'r-', lw=1)
+        # Add a small vertical tick at the end of the leader line
+        ax.plot([throat_x-dimension_gap, throat_x-dimension_gap], [throat_r-dimension_gap*0.2, throat_r+dimension_gap*0.2], 'r-', lw=1)
+        # Add the dimension text
+        ax.text(throat_x-dimension_gap*1.2, throat_r, f"R$_t$ = {throat_r:.3f}m", 
+                verticalalignment='center', horizontalalignment='right',
+                fontsize=9, color='darkred', fontweight='bold')
+        
+        # Exit radius - use the same approach for consistency
+        # Draw a small tick at the exit wall
+        ax.plot([x[-1]-dimension_gap*0.2, x[-1]+dimension_gap*0.2], [exit_r, exit_r], 'r-', lw=1)
+        # Draw the leader line to the side
+        ax.plot([x[-1]+dimension_gap*0.2, x[-1]+dimension_gap], [exit_r, exit_r], 'r-', lw=1)
+        # Add a small vertical tick at the end of the leader line
+        ax.plot([x[-1]+dimension_gap, x[-1]+dimension_gap], [exit_r-dimension_gap*0.2, exit_r+dimension_gap*0.2], 'r-', lw=1)
+        # Add the dimension text
+        ax.text(x[-1]+dimension_gap*1.2, exit_r, f"R$_e$ = {exit_r:.3f}m", 
+                verticalalignment='center', horizontalalignment='left',
+                fontsize=9, color='darkred', fontweight='bold')
+        
+        # Total length with engineering dimension line
+        dim_offset = -max_radius * 1.3  # Offset for dimension line
+        ax.plot([x[0], x[-1]], [dim_offset, dim_offset], 'r-', lw=1)
+        # Add arrow markers
+        ax.plot(x[0], dim_offset, 'r<', markersize=5)
+        ax.plot(x[-1], dim_offset, 'r>', markersize=5)
+        # Add dimension text
+        ax.text((x[0]+x[-1])/2, dim_offset * 1.1, f"L = {x[-1]-x[0]:.3f}m", 
+                verticalalignment='top', horizontalalignment='center',
+                fontsize=9, color='darkred', fontweight='bold')
+        
+        # Add area ratio annotation with correct calculation
+        # Double check area ratio calculation to ensure accuracy
+        # Use actual throat and exit area instead of just radius ratio squared
+        A_throat = np.pi * throat_r**2
+        A_exit = np.pi * exit_r**2
+        if A_throat > 0 and not np.isclose(A_throat, 0):
+            area_ratio = A_exit / A_throat
+        else:
+            # Fallback to CEA data area ratio if throat area is zero
+            area_ratio = cea_data.get('area_ratio', cea_data.get('Ae/At', 8.0))
+        
+        # Format area ratio to avoid extremely large values (limit decimal places)
+        area_ratio_text = f"{area_ratio:.2f}" if area_ratio < 1000 else f"{area_ratio:.1f}"
+        
+        # Add the area ratio annotation in a clean box
+        ax.text(throat_x + length*0.4, max_radius*0.7, 
+                f"Area Ratio (Ae/At) = {area_ratio_text}",
+                fontsize=9, color='navy', fontweight='bold',
+                bbox=dict(facecolor='white', alpha=0.7, edgecolor='lightgray', pad=3))
+        
+        # Plot formatting
+        ax.set_title(f"{nozzle_type} Nozzle Design")
+        ax.set_xlabel("Axial Distance (m)")
+        ax.set_ylabel("Radial Distance (m)")
+        ax.grid(True, linestyle='--', alpha=0.6)
+        
+        # Ensure the plot is centered on the axis
+        ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+        
+        # Equal aspect ratio
+        ax.set_aspect('equal')
+        
+        # Add a tight layout
+        fig.tight_layout()
+        
+        # Render the figure
+        self.nozzle_canvas.draw()
+        
+        # Update the performance text with more comprehensive metrics
+        performance_text = f"""Nozzle Performance Metrics:
+        
+        Area Ratio (Ae/At): {performance['area_ratio']:.2f}
+        Thrust Coefficient (Cf): {performance['thrust_coefficient']:.3f}
+        Ideal Thrust Coefficient: {performance['ideal_thrust_coefficient']:.3f}
+        Divergence Loss Factor: {performance['divergence_loss_factor']:.3f}
+        Divergence Angle: {performance['divergence_angle_deg']:.2f}°
+        Nozzle Efficiency: {performance['nozzle_efficiency']:.2%}
+        Length to Throat Ratio: {performance['length_to_throat_ratio']:.2f}
+        Surface Area: {performance['surface_area']:.4f} m²
+        Exit Mach Number: {performance['exit_mach_number']:.2f}
+        """
+        
+        self.nozzle_text.setText(performance_text)
+        
+        # Render the figure
+        self.nozzle_canvas.draw()
+        
+        # Update performance text
+        html = f"""<h2>{nozzle_type} Nozzle Performance</h2>
+        <table border='0' cellspacing='5' cellpadding='5'>
+            <tr>
+                <td><b>Area Ratio (A₍/A*):</b></td>
+                <td>{performance['area_ratio']:.2f}</td>
+                <td><b>Pressure Ratio:</b></td>
+                <td>{performance['pressure_ratio']:.2f}</td>
+            </tr>
+            <tr>
+                <td><b>Thrust Coefficient:</b></td>
+                <td>{performance['thrust_coefficient']:.4f}</td>
+                <td><b>Nozzle Efficiency:</b></td>
+                <td>{performance['nozzle_efficiency']:.2f}</td>
+            </tr>
+            <tr>
+                <td><b>Length/Throat Ratio:</b></td>
+                <td>{performance['length_to_throat_ratio']:.2f}</td>
+                <td><b>Divergence Loss Factor:</b></td>
+                <td>{performance['divergence_loss_factor']:.4f}</td>
+            </tr>
+        </table>
+        <p><small>Based on best performing case: O/F = {best_case['O/F']:.2f}, Pc = {best_case['Pc (bar)']} bar</small></p>
+        """
+        self.nozzle_text.setHtml(html)
+        
+    def export_nozzle_coordinates(self):
+        """Export nozzle coordinates to a CSV file"""
+        if self.df is None or not hasattr(self, 'current_nozzle_coords'):
+            return
+        
+        fname, _ = QFileDialog.getSaveFileName(self, "Export Nozzle Coordinates", "", "CSV Files (*.csv);;Text Files (*.txt)")
+        if fname:
+            x, r = self.current_nozzle_coords
+            success = nozzle.export_nozzle_coordinates(x, r, fname)
+            if success:
+                self.status.showMessage(f"Nozzle coordinates exported to {fname}", 5000)
+            else:
+                self.status.showMessage("Error exporting nozzle coordinates", 5000)

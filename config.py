@@ -5,8 +5,6 @@ G0 = 9.80665  # m/s²
 
 CONFIG_PATH = os.path.expanduser("~/.cea_analyzer_config.json")
 DEFAULT_CONFIG = {
-    "heatmap_interp": "nearest",
-    "regression_degree": 2,
     "pdf_report_title": "CEA Analysis Report"
 }
 
